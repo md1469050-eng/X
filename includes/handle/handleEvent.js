@@ -2,12 +2,10 @@
 
 module.exports = function ({ api, models, Users, Threads, Currencies }) {
   return async function ({ event }) {
-    const { events, eventRegistered, commands } = global.client;
-
-    // ✅ Crash-proof
+    const { events, eventRegistered, commands } = global.client || {};
     if (!events || !commands) return;
 
-    // ── Event handlers ───────────────────────────────────
+    // ── Event handlers ───────────────────────────────
     for (const [name, evt] of events) {
       if (global.config?.EVENT_DISABLED?.includes(name)) continue;
       try {
@@ -17,7 +15,7 @@ module.exports = function ({ api, models, Users, Threads, Currencies }) {
       }
     }
 
-    // ── Command handleEvent ──────────────────────────────
+    // ── Command handleEvent (rank, xp, no-prefix AI etc.) ─
     for (const name of (eventRegistered || [])) {
       const cmd = commands.get(name);
       if (!cmd?.handleEvent) continue;
