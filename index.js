@@ -545,6 +545,7 @@ async function startBot(models) {
 
     await loadDBData(models);
     setupExpress();
+    try { require('./utils/keepAlive')(); } catch(e) { log.warn('keepAlive: ' + e.message); }
     startHotReloader();
 
     const ctx = { api, models, Users, Threads, Currencies };
