@@ -570,9 +570,19 @@ async function startBot(models) {
 
   login({ appState: appstate, ...global.config.FCAOption }, async (err, api) => {
     if (err) {
-      log.error(`লগইন ব্যর্থ: ${JSON.stringify(err)}`);
-      log.warn("appstate পুরনো হতে পারে। নতুন cookie দিন।");
-      return;
+      const errCode = err?.error || err?.code || "";
+      const errMsg  = err?.errorSummary || err?.message || JSON.stringify(err);
+      log.error(`লগইন ব্যর্থ: ${errMsg}`);
+      if (errCode === 1357004 || String(errCode) === "1357004" || String(errMsg).includes("Not logged in")) {
+        log.warn("════════════════════════════════════════");
+        log.warn("❌ APPSTATE EXPIRED — Facebook session শেষ হয়ে গেছে!");
+        log.warn("✅ সমাধান: নতুন appstate.json তৈরি করে রেপোতে push করুন।");
+        log.warn("   Tool: c3c-fbstate অথবা ব্রাউজার extension ব্যবহার করুন।");
+        log.warn("════════════════════════════════════════");
+      } else {
+        log.warn("appstate পুরনো হতে পারে। নতুন cookie দিন।");
+      }
+      process.exit(1);
     }
 
     try {
@@ -588,7 +598,6 @@ async function startBot(models) {
     log.success(`লগইন সফল! Bot UID: ${global.config.botID}`);
 
     await loadDBData(models);
-    setupExpress();
     try { require('./utils/keepAlive')(); } catch(e) { log.warn('keepAlive: ' + e.message); }
     startHotReloader();
 
