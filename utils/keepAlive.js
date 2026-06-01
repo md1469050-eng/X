@@ -8,31 +8,44 @@
 "use strict";
 
 const express = require("express");
-const axios = require("axios");
-const logger = require("./log");
+const axios   = require("axios");
+const logger  = require("./log");
 
 module.exports = function keepAlive() {
-  const app = express();
-  const PORT = global.config?.Render?.port || 3000;
+  const app  = express();
+  const PORT = global.config?.Render?.port || process.env.PORT || 3000;
 
   app.get("/", (req, res) => {
     res.json({
-      status: "🟢 Online",
-      bot: "BELAL BOTX666",
-      version: "6.6.6",
-      master: "Belal YT — চাঁদের পাহাড়",
-      uptime: Math.floor(process.uptime()) + "s",
+      status:   "🟢 Online",
+      bot:      "BELAL BOTX666",
+      version:  "7.0.0",
+      master:   "Belal YT — চাঁদের পাহাড়",
+      uptime:   Math.floor(process.uptime()) + "s",
       commands: global.client?.commands?.size || 0,
-      events: global.client?.events?.size || 0,
-      time: new Date().toLocaleString("bn-BD", { timeZone: "Asia/Dhaka" }),
+      events:   global.client?.events?.size   || 0,
+      time:     new Date().toLocaleString("bn-BD", { timeZone: "Asia/Dhaka" }),
     });
   });
 
-  app.get("/ping", (req, res) => res.send("🏓 Pong!"));
+  app.get("/ping",   (req, res) => res.send("🏓 Pong!"));
   app.get("/health", (req, res) => res.json({ status: "healthy" }));
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     logger.success(`🌐 Keep-Alive Server চালু: Port ${PORT}`);
+  });
+
+  // Port ব্যবহারে থাকলে পরের port try করো
+  server.on("error", (e) => {
+    if (e.code === "EADDRINUSE") {
+      const fallback = PORT + 1;
+      logger.warn(`⚠️ Port ${PORT} busy, port ${fallback} এ চেষ্টা করছি...`);
+      app.listen(fallback, () => {
+        logger.success(`🌐 Keep-Alive Server চালু: Port ${fallback}`);
+      });
+    } else {
+      logger.warn(`Keep-Alive error: ${e.message}`);
+    }
   });
 
   // নিজেই নিজেকে ping করে জীবিত রাখে
@@ -49,3 +62,4 @@ module.exports = function keepAlive() {
     }, interval);
   }
 };
+                 
