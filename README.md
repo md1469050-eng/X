@@ -9,8 +9,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 */5 * * *'
+
+# একসাথে শুধু একটা Action চলবে — নতুন চালু হলে পুরানোটা cancel হবে
+concurrency:
+  group: bot-runner
+  cancel-in-progress: true
 
 jobs:
   bot:
@@ -62,5 +65,3 @@ jobs:
         env:
           NODE_ENV: production
           TZ:       Asia/Dhaka
-
-          
