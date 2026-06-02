@@ -90,7 +90,7 @@ async function searchAndDownload(keyword, fmt) {
 
 module.exports = {
   config: {
-    name: "videov2",
+    name: "v",
     version: "7.0.0",
     author: "Belal YT",
     countDown: 10,
