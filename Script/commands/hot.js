@@ -1,32 +1,26 @@
 const axios = require('axios');
 
-// 🔥 শুধু ইন্ডিয়ান হট ভিডিও, রিমিক্স ও এডিটর কীওয়ার্ড
+// 🔥 শুধু মেয়েদের হট ড্যান্স, রিমিক্স ও এডিটের নির্দিষ্ট কীওয়ার্ড (টার্গেটেড)
 const SEARCH_TERMS = [
-    "indian hot girl dance",
-    "indian hot reels",
-    "indian capcut edit hot",
-    "indian viral girl dance",
-    "indian hot remix",
-    "indian hot edit",
-    "indian girl dance remix",
-    "indian hot viral reels",
-    "desi hot dance reels",
-    "indian college girl dance",
-    "indian hot dance video",
-    "indian remix dance",
-    "indian hot edit reels",
-    "indian trending girl",
-    "desi hot remix",
-    "indian aesthetic dance",
-    "indian hot viral remix"
+    "hot girl dance",
+    "hot girls reels",
+    "maishayourqueen",
+    "capcut_edit girl",
+    "hot girls edit",
+    "tiktok hot girl dance",
+    "hot dance girl viral",
+    "dansarbabyshop",
+    "hot dance viral remix girl",
+    "trending girl remix",
+    "hot edit girl",
+    "hotgirlsdance",
+    "bestgirlschallenges",
+    "sexy dance girl",
+    "girl dance capcut"
 ];
 
-// ❌ বাইরের দেশি বা ফালতু ভিডিও বাদ দেওয়ার কীওয়ার্ড
-const EXCLUDE_WORDS = [
-    "pakistani", "bangladeshi", "nepali", "srilankan", "arab", "turkey", "iran",
-    "american", "uk", "europe", "russian", "african", "chinese", "japanese",
-    "korean", "thai", "vietnamese", "malay", "white girl", "foreign"
-];
+// ❌ বাদ দেওয়ার জন্য কীওয়ার্ড (ছেলে, পুরুষ, ইত্যাদি যাতে না আসে)
+const EXCLUDE_WORDS = ["boy", "male", "guy", "man", "bro", "dude", "ছেলে", "পুরুষ"];
 
 // একই ভিডিও বারবার আসা ঠেকাতে
 let recentVideoIds = [];
@@ -39,14 +33,14 @@ const USER_AGENTS = [
 module.exports = {
     config: {
         name: "hot",
-        aliases: ["হট", "hotreels", "indianhot"],
-        description: "শুধু ইন্ডিয়ান হট ভিডিও, রিমিক্স ও এডিটর কন্টেন্ট (বিদেশি ভিডিও বাদ)",
+        aliases: ["হট", "hotreels", "hotgirls"],
+        description: "শুধু হট গার্লস ড্যান্স, রিমিক্স ও ক্যাপকাট এডিট ভিডিও (ছেলের ভিডিও বাদ)",
         usage: "hot",
         cooldown: 10,
         role: 0
     },
     run: async ({ api, event }) => {
-        const wait = await api.sendMessage("🔥 ইন্ডিয়ান হট ভিডিও খুঁজে বের করছি...", event.threadID);
+        const wait = await api.sendMessage("🔥 শুধু হট গার্লস ভিডিও খুঁজে বের করছি...", event.threadID);
         try {
             let videoFound = false;
             let attempts = 0;
@@ -54,7 +48,8 @@ module.exports = {
             let videoTitle = null;
             let videoDigg = 0;
 
-            while (!videoFound && attempts < 8) {
+            // ৫ বার চেষ্টা করবে যতক্ষণ না একটি গ্রহণযোগ্য ভিডিও পাওয়া যায়
+            while (!videoFound && attempts < 5) {
                 const randomTerm = SEARCH_TERMS[Math.floor(Math.random() * SEARCH_TERMS.length)];
                 const randomUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
@@ -66,50 +61,47 @@ module.exports = {
                 let videos = response.data?.data?.videos;
                 if (!videos || videos.length === 0) continue;
 
+                // আগে দেখা ভিডিও বাদ
                 let availableVideos = videos.filter(v => !recentVideoIds.includes(v.video_id));
                 if (availableVideos.length === 0) {
                     recentVideoIds = [];
                     availableVideos = videos;
                 }
 
-                // এলোমেলো ভিডিও বাছাই করে চেক
+                // এলোমেলো ভিডিও বাছাই করে চেক করো বাদ পড়ার শর্ত আছে কিনা
                 for (let i = 0; i < availableVideos.length; i++) {
                     const candidate = availableVideos[i];
                     const title = (candidate.title || "").toLowerCase();
-                    const author = (candidate.author?.unique_id || "").toLowerCase();
-                    
-                    // শর্ত: ইন্ডিয়ান কন্টেন্ট নিশ্চিত এবং বাইরের দেশের নয়
-                    let isIndian = title.includes("indian") || author.includes("indian") || 
-                                   title.includes("desi") || author.includes("desi");
-                    let isExcluded = EXCLUDE_WORDS.some(word => title.includes(word) || author.includes(word));
-                    
-                    // মেয়েদের ভিডিও নিশ্চিত করতে (ছেলেদের বাদ)
-                    let isMale = title.includes("boy") || title.includes("male") || author.includes("boy");
-                    
-                    if (isIndian && !isExcluded && !isMale) {
-                        videoUrl = candidate.play;
-                        videoTitle = candidate.title;
-                        videoDigg = candidate.digg_count || 0;
-                        recentVideoIds.push(candidate.video_id);
-                        if (recentVideoIds.length > 25) recentVideoIds.shift();
-                        videoFound = true;
-                        break;
+                    // চেক করো টাইটেলে কোন এক্সক্লুড ওয়ার্ড আছে কিনা
+                    let containsExclude = EXCLUDE_WORDS.some(word => title.includes(word));
+                    if (!containsExclude) {
+                        // অতিরিক্ত চেক: ভিডিওর ইউজারের নামেও যেন "boy" না থাকে
+                        const authorName = (candidate.author?.unique_id || "").toLowerCase();
+                        if (!EXCLUDE_WORDS.some(word => authorName.includes(word))) {
+                            videoUrl = candidate.play;
+                            videoTitle = candidate.title;
+                            videoDigg = candidate.digg_count || 0;
+                            recentVideoIds.push(candidate.video_id);
+                            if (recentVideoIds.length > 25) recentVideoIds.shift();
+                            videoFound = true;
+                            break;
+                        }
                     }
                 }
                 attempts++;
             }
 
-            if (!videoUrl) throw new Error("কোনো ইন্ডিয়ান হট ভিডিও পাওয়া যায়নি");
+            if (!videoUrl) throw new Error("কোনো গ্রহণযোগ্য ভিডিও পাওয়া যায়নি");
 
             const videoStream = await axios.get(videoUrl, { responseType: 'stream', timeout: 20000 }).then(r => r.data);
             await api.sendMessage({
-                body: `💃 ইন্ডিয়ান হট ভিডিও:\n📹 ${videoTitle || "Indian Hot Dance"}\n❤️ লাইক: ${videoDigg}`,
+                body: `💃 আপনার জন্য হট গার্লস ভিডিও:\n📹 ${videoTitle || "Hot Dance"}\n❤️ লাইক: ${videoDigg}`,
                 attachment: videoStream
             }, event.threadID);
             await api.unsendMessage(wait.messageID);
         } catch (error) {
-            console.error("Indian Hot error:", error.message);
-            api.sendMessage(`❌ ইন্ডিয়ান হট ভিডিও আনতে ব্যর্থ। আবার চেষ্টা করুন।`, event.threadID);
+            console.error("Hot command error:", error.message);
+            api.sendMessage(`❌ ভিডিও আনতে ব্যর্থ। আবার চেষ্টা করুন।`, event.threadID);
             await api.unsendMessage(wait.messageID);
         }
     }
