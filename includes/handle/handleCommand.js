@@ -32,6 +32,9 @@ module.exports = function ({ api, models, Users, Threads, Currencies }) {
     const botID = String(global.config?.botID || "");
     if (senderID === botID) return;
 
+    // ── Anti-Spam check ───────────────────────────────────────────
+    if (global.checkAntiSpam?.(senderID)) return; // চুপচাপ ignore
+
     // ✅ FIX: প্রতিবার live থেকে PREFIX পড়ো
     const threadSetting   = (threadData && threadData.get(threadID)) || {};
     const effectivePrefix = threadSetting.hasOwnProperty("PREFIX")
