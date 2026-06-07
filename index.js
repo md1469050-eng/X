@@ -176,6 +176,29 @@ global.data = {
   allThreadID:     [],
 };
 
+// ── Anti-Spam tracker — একই user বেশি বেশি command দিলে block ──
+global.antiSpam = new Map(); // senderID → { count, resetAt }
+
+function checkAntiSpam(senderID) {
+  const cfg = global.config?.System?.antiSpam;
+  if (!cfg?.enable) return false;
+  const ADMINBOT = (global.config?.ADMINBOT || []).map(String);
+  if (ADMINBOT.includes(String(senderID))) return false; // admin exempt
+
+  const now   = Date.now();
+  const entry = global.antiSpam.get(senderID) || { count: 0, resetAt: now + 60000 };
+
+  if (now > entry.resetAt) {
+    entry.count   = 1;
+    entry.resetAt = now + (cfg.cooldown || 60000);
+  } else {
+    entry.count++;
+  }
+  global.antiSpam.set(senderID, entry);
+  return entry.count > (cfg.maxPerMinute || 20);
+}
+global.checkAntiSpam = checkAntiSpam;
+
 // ═══════════════════════════════════════════════════
 // STEP 5: global.nodemodule — যেকোনো package auto-require
 // ═══════════════════════════════════════════════════
@@ -610,7 +633,8 @@ function setupExpress() {
 }
 
 // ═══════════════════════════════════════════════════
-// STEP 17: Main startBot
+// STEP 17: Multi-Account Rotation System
+// একটা account ban/logout হলে পরেরটা auto চালু হবে
 // ═══════════════════════════════════════════════════
 async function startBot(models) {
   const ctrlPath   = path.join(ROOT, "includes", "controllers");
@@ -618,161 +642,243 @@ async function startBot(models) {
   const Threads    = require(path.join(ctrlPath, "threads"))({ models, api: null });
   const Currencies = require(path.join(ctrlPath, "currencies"))({ models });
 
-  const apPath = path.resolve(ROOT, global.config.APPSTATEPATH || "appstate.json");
-  if (!fs.existsSync(apPath)) {
-    log.error("appstate.json ফাইল পাওয়া যায়নি!");
-    log.error("সমাধান: c3c-fbstate বা browser extension দিয়ে appstate তৈরি করো।");
-    process.exit(1);
-  }
-  let appstate;
-  try { appstate = JSON.parse(fs.readFileSync(apPath, "utf-8")); }
-  catch {
-    log.error("appstate.json পড়তে সমস্যা হয়েছে!");
-    log.error("সমাধান: appstate.json ফাইলটা সঠিক JSON format এ আছে কিনা চেক করো।");
-    process.exit(1);
+  // ── Multi-account list load ────────────────────────────────────
+  // accounts.json এ একাধিক appstate রাখা যাবে
+  // format: [{"name":"Account1","path":"appstate1.json"}, ...]
+  let accountList = [];
+  const accountsPath = path.join(ROOT, "accounts.json");
+
+  if (fs.existsSync(accountsPath)) {
+    try {
+      accountList = JSON.parse(fs.readFileSync(accountsPath, "utf-8"));
+      log.success(`Multi-account লোড → ${accountList.length}টি account পাওয়া গেছে ✅`);
+    } catch {
+      log.warn("accounts.json পড়তে সমস্যা — single account mode চালু।");
+    }
   }
 
-  log.info("Facebook লগইন হচ্ছে...");
+  // Single account fallback
+  if (!accountList.length) {
+    accountList = [{
+      name: "Main Account",
+      path: global.config.APPSTATEPATH || "appstate.json",
+    }];
+  }
 
-  login({ appState: appstate, ...global.config.FCAOption }, async (loginErr, api) => {
-    if (loginErr) {
-      const code = loginErr?.error || loginErr?.code || "";
-      const msg  = loginErr?.errorSummary || loginErr?.message || JSON.stringify(loginErr);
-      log.error(`লগইন ব্যর্থ হয়েছে!`);
-      log.error(`কারণ: ${msg}`);
-      if (String(code) === "1357004" || String(msg).includes("Not logged in")) {
-        _origLog("");
-        _origLog(chalk.red("  ╔══════════════════════════════════════════════╗"));
-        _origLog(chalk.red("  ║  ❌ APPSTATE মেয়াদ শেষ হয়ে গেছে!           ║"));
-        _origLog(chalk.red("  ╠══════════════════════════════════════════════╣"));
-        _origLog(chalk.yellow("  ║  ✅ সমাধান: নতুন appstate.json দিন।        ║"));
-        _origLog(chalk.yellow("  ║  🔧 Tool: c3c-fbstate বা browser extension  ║"));
-        _origLog(chalk.yellow("  ║  📌 তারপর GitHub এ push করুন               ║"));
-        _origLog(chalk.red("  ╚══════════════════════════════════════════════╝"));
-        _origLog("");
+  let currentIndex = 0;
+
+  async function tryLogin(index) {
+    const account = accountList[index % accountList.length];
+    const apPath  = path.resolve(ROOT, account.path);
+
+    _origLog("");
+    _origLog(chalk.hex("#FFD700").bold(`  ╔══════════════════════════════════════════╗`));
+    _origLog(chalk.hex("#FFD700").bold(`  ║  🔑 Login চেষ্টা: ${account.name.padEnd(22)}║`));
+    _origLog(chalk.hex("#FFD700").bold(`  ║  📁 File: ${account.path.padEnd(30)}║`));
+    _origLog(chalk.hex("#FFD700").bold(`  ╚══════════════════════════════════════════╝`));
+    _origLog("");
+
+    if (!fs.existsSync(apPath)) {
+      log.error(`${account.name}: appstate file পাওয়া যায়নি → ${apPath}`);
+      // পরের account try করো
+      const next = (index + 1) % accountList.length;
+      if (next !== index % accountList.length) {
+        log.warn(`পরের account try করা হচ্ছে...`);
+        return setTimeout(() => tryLogin(next), 3000);
       }
-      process.exit(1);
+      log.error("কোনো valid appstate পাওয়া যায়নি! বট বন্ধ হচ্ছে।");
+      return process.exit(1);
     }
 
-    // Save refreshed appstate
-    try { fs.writeFileSync(apPath, JSON.stringify(api.getAppState(), null, 2)); } catch {}
-
-    api.setOptions(global.config.FCAOption || {});
-    global.client.api  = api;
-    global.config.botID = api.getCurrentUserID();
-    log.success(`লগইন সফল! Bot UID: ${global.config.botID}`);
-
-    // Inject api into controllers
-    Users.getInfo      = async id  => { try { return (await api.getUserInfo(id))[id]; }  catch { return { name: String(id) }; } };
-    Threads.getInfo    = async tid => { try { return await api.getThreadInfo(tid); }       catch { return {}; } };
-
-    // Axios speed optimize
+    let appstate;
     try {
-      const axios = require("axios");
-      axios.defaults.timeout          = 30000;
-      axios.defaults.maxContentLength = 500 * 1024 * 1024;
-      axios.defaults.maxBodyLength    = 500 * 1024 * 1024;
-      axios.defaults.headers.common["Connection"]    = "keep-alive";
-      axios.defaults.headers.common["Cache-Control"] = "no-cache";
-      axios.defaults.headers.common["User-Agent"]    =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36";
-    } catch {}
+      appstate = JSON.parse(fs.readFileSync(apPath, "utf-8"));
+    } catch {
+      log.error(`${account.name}: appstate.json পড়তে সমস্যা!`);
+      const next = (index + 1) % accountList.length;
+      if (next !== index % accountList.length)
+        return setTimeout(() => tryLogin(next), 3000);
+      return process.exit(1);
+    }
 
-    await loadDBData(Threads, Users, Currencies);
-    startHotReloader();
-    setupExpress();
+    log.info(`Facebook login হচ্ছে: ${account.name}...`);
 
-    // Load all handlers
-    const hCtx = { api, models, Users, Threads, Currencies };
-    const handleCommandFn        = require("./includes/handle/handleCommand")(hCtx);
-    const handleCommandEventFn   = require("./includes/handle/handleCommandEvent")(hCtx);
-    const handleEventFn          = require("./includes/handle/handleEvent")(hCtx);
-    const handleReactionFn       = require("./includes/handle/handleReaction")(hCtx);
-    const handleReplyFn          = require("./includes/handle/handleReply")(hCtx);
-    const handleCreateDatabaseFn = require("./includes/handle/handleCreateDatabase")({ Users, Threads, Currencies });
-    const startSchedule          = require("./includes/handle/handleSchedule")(hCtx);
-    startSchedule();
+    login({ appState: appstate, ...global.config.FCAOption }, async (loginErr, api) => {
+      if (loginErr) {
+        const code = String(loginErr?.error || loginErr?.code || "");
+        const msg  = loginErr?.errorSummary || loginErr?.message || JSON.stringify(loginErr);
 
-    log.bot(`✅ ${global.client.commands.size} কমান্ড | ${global.client.events.size} ইভেন্ট | UID: ${global.config.botID}`);
-    log.bot(`🚀 BELAL BOTX666 v8.0 চলছে — ${moment().tz("Asia/Dhaka").format("DD/MM/YYYY HH:mm:ss")}`);
-    log.done(global.client.commands.size, global.client._loadFail || 0);
+        log.error(`${account.name} login ব্যর্থ!`);
+        log.error(`কারণ: ${msg}`);
 
-    // Auto-save appstate every 30min
-    setInterval(() => {
-      try { fs.writeFileSync(apPath, JSON.stringify(api.getAppState(), null, 2)); }
-      catch {}
-    }, 30 * 60 * 1000);
+        if (code === "1357004" || msg.includes("Not logged in") || msg.includes("checkpoint")) {
+          _origLog("");
+          _origLog(chalk.red(`  ╔══════════════════════════════════════════╗`));
+          _origLog(chalk.red(`  ║  ❌ ${account.name} — Account Block/Expired!  ║`));
+          _origLog(chalk.red(`  ╠══════════════════════════════════════════╣`));
+          _origLog(chalk.yellow(`  ║  ✅ নতুন appstate দিয়ে accounts.json     ║`));
+          _origLog(chalk.yellow(`  ║     আপডেট করো।                          ║`));
+          _origLog(chalk.red(`  ╚══════════════════════════════════════════╝`));
+          _origLog("");
+        }
 
-    // ═══════════════════════════════
-    // MQTT Listener
-    // ═══════════════════════════════
-    api.listenMqtt(async (err, event) => {
-      if (err) {
-        const code = String(err?.error || err?.code || "");
-        const msg  = String(err?.errorSummary || err?.message || err?.error || "");
-        if (msg.includes("sync_sequence_id")) {
-          log.warn("sync_sequence_id পাওয়া যায়নি।");
-          log.warn("সমাধান: গ্রুপে একটা message পাঠাও তারপর restart করো।");
+        // পরের account try করো
+        const next = (index + 1) % accountList.length;
+        if (accountList.length > 1) {
+          log.warn(`⏳ ৫ সেকেন্ড পরে পরের account try করা হবে...`);
+          return setTimeout(() => tryLogin(next), 5000);
+        }
+        return process.exit(1);
+      }
+
+      // ── Login সফল ─────────────────────────────────────────────
+      try { fs.writeFileSync(apPath, JSON.stringify(api.getAppState(), null, 2)); } catch {}
+
+      api.setOptions(global.config.FCAOption || {});
+      global.client.api   = api;
+      global.config.botID  = api.getCurrentUserID();
+      currentIndex         = index;
+
+      log.success(`✅ Login সফল! Account: ${account.name} | UID: ${global.config.botID}`);
+
+      // Inject api into controllers
+      Users.getInfo   = async id  => { try { return (await api.getUserInfo(id))[id]; }  catch { return { name: String(id) }; } };
+      Threads.getInfo = async tid => { try { return await api.getThreadInfo(tid); }       catch { return {}; } };
+
+      // Axios speed optimize
+      try {
+        const axios = require("axios");
+        axios.defaults.timeout          = 30000;
+        axios.defaults.maxContentLength = 500 * 1024 * 1024;
+        axios.defaults.maxBodyLength    = 500 * 1024 * 1024;
+        axios.defaults.headers.common["Connection"]    = "keep-alive";
+        axios.defaults.headers.common["Cache-Control"] = "no-cache";
+        axios.defaults.headers.common["User-Agent"]    =
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36";
+      } catch {}
+
+      await loadDBData(Threads, Users, Currencies);
+      startHotReloader();
+      setupExpress();
+
+      // Load handlers
+      const hCtx = { api, models, Users, Threads, Currencies };
+      const handleCommandFn        = require("./includes/handle/handleCommand")(hCtx);
+      const handleCommandEventFn   = require("./includes/handle/handleCommandEvent")(hCtx);
+      const handleEventFn          = require("./includes/handle/handleEvent")(hCtx);
+      const handleReactionFn       = require("./includes/handle/handleReaction")(hCtx);
+      const handleReplyFn          = require("./includes/handle/handleReply")(hCtx);
+      const handleCreateDatabaseFn = require("./includes/handle/handleCreateDatabase")({ Users, Threads, Currencies });
+      const startSchedule          = require("./includes/handle/handleSchedule")(hCtx);
+      startSchedule();
+
+      log.bot(`✅ ${global.client.commands.size} কমান্ড | ${global.client.events.size} ইভেন্ট`);
+      log.done(global.client.commands.size, global.client._loadFail || 0);
+
+      // Auto-save appstate every 30min
+      setInterval(() => {
+        try { fs.writeFileSync(apPath, JSON.stringify(api.getAppState(), null, 2)); } catch {}
+      }, 30 * 60 * 1000);
+
+      // ── MQTT Listener ──────────────────────────────────────────
+      api.listenMqtt(async (err, event) => {
+        if (err) {
+          const code = String(err?.error || err?.code || "");
+          const msg  = String(err?.errorSummary || err?.message || err?.error || "");
+
+          if (msg.includes("sync_sequence_id")) {
+            log.warn("sync_sequence_id error — গ্রুপে একটা message পাঠাও তারপর restart করো।");
+            return;
+          }
+
+          log.error(`Listener ত্রুটি: [${code}] ${msg.slice(0, 100)}`);
+
+          // Account ban/logout হলে পরেরটায় switch করো
+          if (
+            code === "1357004" ||
+            msg.includes("Not logged in") ||
+            msg.includes("checkpoint") ||
+            msg.includes("banned") ||
+            msg.includes("Unauthorized")
+          ) {
+            log.warn(`⚠️ ${account.name} — Session শেষ বা ban হয়েছে!`);
+            if (accountList.length > 1) {
+              const next = (currentIndex + 1) % accountList.length;
+              log.warn(`🔄 পরের account এ switch হচ্ছে: ${accountList[next].name}`);
+              // Admin কে notify করো
+              try {
+                const admins = global.config?.ADMINBOT || [];
+                for (const uid of admins) {
+                  api.sendMessage(
+                    `⚠️ Account Switch!\n\n` +
+                    `❌ ${account.name} — ban/logout হয়েছে\n` +
+                    `✅ ${accountList[next].name} — এ switch হচ্ছে\n\n` +
+                    `🕐 ${moment().tz("Asia/Dhaka").format("HH:mm:ss DD/MM/YYYY")}`,
+                    uid
+                  ).catch(() => {});
+                }
+              } catch {}
+              setTimeout(() => tryLogin(next), 5000);
+            } else {
+              log.error("শুধু একটাই account আছে! নতুন appstate দিন।");
+              setTimeout(() => process.exit(1), 3000);
+            }
+            return;
+          }
           return;
         }
-        log.error(`Listener ত্রুটি: [${code}] ${msg.slice(0, 100)}`);
-        if (code === "1357004") {
-          log.warn("Facebook session শেষ হয়ে গেছে! নতুন appstate দিন।");
-          setTimeout(() => process.exit(1), 3000);
-        }
-        return;
-      }
 
-      try {
-        // Message cache (for 😡 delete / ⚠️ kick)
-        if (event.type === "message" || event.type === "message_reply") {
-          global.client.messageCache.set(event.messageID, {
-            senderID: event.senderID,
-            threadID: event.threadID,
-            body:     event.body?.slice(0, 100),
-            time:     Date.now(),
-          });
-          // Cache max 1000 entries
-          if (global.client.messageCache.size > 1000) {
-            const first = global.client.messageCache.keys().next().value;
-            global.client.messageCache.delete(first);
+        try {
+          if (event.type === "message" || event.type === "message_reply") {
+            global.client.messageCache.set(event.messageID, {
+              senderID: event.senderID,
+              threadID: event.threadID,
+              body:     event.body?.slice(0, 100),
+              time:     Date.now(),
+            });
+            if (global.client.messageCache.size > 1000) {
+              const first = global.client.messageCache.keys().next().value;
+              global.client.messageCache.delete(first);
+            }
+            await handleCreateDatabaseFn({ event }).catch(() => {});
           }
-          // Auto-create DB entries
-          await handleCreateDatabaseFn({ event }).catch(() => {});
-        }
 
-        switch (event.type) {
-          case "message":
-            await handleCommandFn({ event });
-            handleCommandEventFn({ event });
-            handleEventFn({ event });
-            break;
-          case "message_reply":
-            await handleCommandFn({ event });
-            handleReplyFn({ event });
-            handleCommandEventFn({ event });
-            handleEventFn({ event });
-            break;
-          case "message_reaction":
-            handleReactionFn({ event });
-            break;
-          case "message_unsend":
-            handleEventFn({ event });
-            break;
-          default:
-            handleEventFn({ event });
+          switch (event.type) {
+            case "message":
+              await handleCommandFn({ event });
+              handleCommandEventFn({ event });
+              handleEventFn({ event });
+              break;
+            case "message_reply":
+              await handleCommandFn({ event });
+              handleReplyFn({ event });
+              handleCommandEventFn({ event });
+              handleEventFn({ event });
+              break;
+            case "message_reaction":
+              handleReactionFn({ event });
+              break;
+            case "message_unsend":
+              handleEventFn({ event });
+              break;
+            default:
+              handleEventFn({ event });
+          }
+        } catch (e) {
+          log.error(`মেসেজ process করতে সমস্যা: ${e.message}`);
+          saveCrashLog("listener", e);
         }
-      } catch (e) {
-        log.error(`মেসেজ process করতে সমস্যা হয়েছে: ${e.message}`);
-        saveCrashLog("listener", e);
-      }
+      });
+
+      // Auto-restart
+      const sys = global.config?.System || {};
+      if (sys.autoRestart && sys.restartInterval)
+        setTimeout(() => { log.warn("⏰ Auto-restart..."); process.exit(0); }, sys.restartInterval * 1000);
     });
+  }
 
-    // Auto-restart
-    const sys = global.config?.System || global.config?.SYSTEM || {};
-    if (sys.autoRestart && sys.restartInterval)
-      setTimeout(() => { log.warn("⏰ নির্ধারিত সময়ে বট পুনরায় চালু হচ্ছে..."); process.exit(0); }, sys.restartInterval * 1000);
-  });
+  // শুরু করো
+  tryLogin(currentIndex);
 }
 
 // ═══════════════════════════════════════════════════
