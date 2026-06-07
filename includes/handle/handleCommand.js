@@ -115,9 +115,20 @@ module.exports = function ({ api, models, Users, Threads, Currencies }) {
       }
     } catch {}
 
+    // ── Inbox check ───────────────────────────────────────────────
+    const isInbox     = senderID === threadID;
+    const isAdmin     = ADMINBOT.includes(senderID);
+    const adminPaOnly = global.config?.adminPaOnly;
+
+    if (isInbox) {
+      // ✅ adminPaOnly: শুধু ADMINBOT ইনবক্সে ব্যবহার করতে পারবে
+      if (adminPaOnly && !isAdmin) return;
+      // allowInbox false হলে সবার জন্য ইনবক্স বন্ধ
+      if (!allowInbox && !isAdmin) return;
+    }
+
     // ── Ban check ─────────────────────────────────────────────────
-    if (!ADMINBOT.includes(senderID)) {
-      if (!allowInbox && senderID === threadID) return;
+    if (!isAdmin) {
       if (userBanned?.has(senderID)) {
         const { reason = "কারণ জানানো হয়নি", dateAdded = "" } = userBanned.get(senderID) || {};
         return api.sendMessage(
