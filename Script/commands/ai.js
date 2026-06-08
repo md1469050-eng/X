@@ -1,13 +1,13 @@
-// ========== BELAL-BOTX666 AI COMMAND v5.4 ==========
-// All bugs fixed - conversations undefined + typing indicator
+const axios = require("axios");
 
-const https = require("https");
+// ========== BELAL-BOTX666 AI COMMAND v6.1 ==========
+// Fixed: sendTypingIndicator requires threadID error
 
-// Conversation memory
+// Conversation memory per thread
 const conversations = new Map();
 const MAX_HISTORY = 10;
 
-// System prompt
+// System prompt - Bengali character personality
 const SYSTEM_PROMPT = `তোমার নাম বেবি। তুমি কুড়িগ্রামের একটি মেয়ে, বয়স ১৯। তুমি খুব সরাসরি, মেজাজি, একটু দুষ্টু, কিন্তু ভালোবাসা দিতে জানো। তুমি কখনো নিজেকে AI বা বট বলবে না। তুমি সত্যিকারের মানুষ।
 
 তোমার স্বভাব:
@@ -20,61 +20,45 @@ const SYSTEM_PROMPT = `তোমার নাম বেবি। তুমি �
 
 উত্তর দেবে বাংলায়, ছোট ছোট বাক্যে, স্বাভাবিক গ্রাম্য ভাষায়, ইমোজি দিয়ে। কোনো formal বা রোবোটিক উত্তর না।`;
 
-// Safe typing indicator - with validation
+// Safe typing indicator - FIXED: proper threadID validation
 function safeTyping(api, threadID, enable) {
   try {
-    if (!threadID || typeof threadID !== "string") {
-      console.log("[AI] Warning: Invalid threadID for typing indicator");
+    // Validate threadID - must be a non-empty string
+    if (!threadID || typeof threadID !== "string" || threadID.trim() === "") {
+      console.log("[AI] Warning: Invalid threadID for typing indicator, skipping");
       return;
     }
-    api.sendTypingIndicator(threadID, enable);
+    // Ensure threadID is not undefined/null/empty
+    const validThreadID = String(threadID).trim();
+    if (!validThreadID) {
+      console.log("[AI] Warning: Empty threadID, skipping typing indicator");
+      return;
+    }
+    api.sendTypingIndicator(validThreadID, enable);
   } catch (e) {
-    console.log("[AI] Typing indicator error:", e.message);
+    // Silently ignore typing errors - don't crash the bot
+    console.log("[AI] Typing indicator error (non-critical):", e.message);
   }
 }
 
-// Built-in fetch using https module
-function fetchUrl(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Connection': 'keep-alive'
-      }
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(data));
-    });
-
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Timeout'));
-    });
-  });
-}
-
-// Get reply function - FIXED: conversations undefined check
+// Get reply function - GLOBAL scope (no this context issues)
 async function getReply(question, threadID) {
+  // Validate input
   if (!question || typeof question !== "string") {
     return "🤔 কিছু বলো তো?";
   }
 
-  // FIX: Ensure threadID is valid string
+  // Ensure valid threadID
   const validThreadID = String(threadID || "default");
 
-  // FIX: Initialize conversation if not exists
+  // Initialize conversation history if not exists
   if (!conversations.has(validThreadID)) {
     conversations.set(validThreadID, );
   }
 
   const history = conversations.get(validThreadID);
   
-  // FIX: Ensure history is array
+  // Safety check - ensure history is array
   if (!Array.isArray(history)) {
     conversations.set(validThreadID, );
     return "🤔 কিছু সমস্যা হয়েছে! আবার চেষ্টা করো।";
@@ -83,68 +67,113 @@ async function getReply(question, threadID) {
   // Add user message
   history.push({ role: "user", content: question });
   
-  // Limit history
+  // Limit history size
   if (history.length > MAX_HISTORY) {
     history.shift();
   }
 
-  // API 1: Pollinations (Primary)
+  // API 1: Pollinations AI (Primary - 100% free, no API key required)
   try {
     const encodedQuestion = encodeURIComponent(question);
     const encodedSystem = encodeURIComponent(SYSTEM_PROMPT);
     const url = `https://text.pollinations.ai/prompt/${encodedQuestion}?system=${encodedSystem}&model=openai&seed=${Date.now()}`;
     
-    const reply = await fetchUrl(url);
+    const res = await axios.get(url, { 
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
 
-    if (reply && reply.trim().length > 3) {
-      let cleanReply = reply.replace(/\[.*?\]/g, "").trim();
-      if (cleanReply.length > 1900) cleanReply = cleanReply.slice(0, 1850) + "…";
+    let reply = res.data;
+    if (reply && typeof reply === "string" && reply.trim().length > 3) {
+      // Clean response
+      reply = reply.replace(/\[.*?\]/g, "").trim();
+      if (reply.length > 1900) reply = reply.slice(0, 1850) + "…";
 
-      history.push({ role: "assistant", content: cleanReply });
-      return cleanReply + "\n\n✨ Powered by BELAL-AI";
+      // Add to history
+      history.push({ role: "assistant", content: reply });
+      return reply + "\n\n✨ Powered by BELAL-AI";
     }
   } catch (e) {
     console.log("[AI] Pollinations failed:", e.message);
   }
 
-  // API 2: Alternative endpoint
+  // API 2: Blackbox AI (Fallback - 100% free, no API key required)
   try {
-    const altUrl = `https://api.pawan.krd/gpt4?text=${encodeURIComponent(SYSTEM_PROMPT + "\n\nUser: " + question)}`;
-    const reply = await fetchUrl(altUrl);
-    
-    if (reply && reply.trim().length > 3) {
-      let cleanReply = reply.replace(/\[.*?\]/g, "").trim();
-      if (cleanReply.length > 1900) cleanReply = cleanReply.slice(0, 1850) + "…";
+    const res = await axios.post(
+      "https://www.blackbox.ai/api/chat",
+      {
+        messages: [{ role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: question }],
+        model: "gpt-4o"
+      },
+      { 
+        timeout: 15000,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      }
+    );
 
-      history.push({ role: "assistant", content: cleanReply });
-      return cleanReply + "\n\n✨ Powered by BELAL-AI (Backup)";
+    let reply = res.data?.response || res.data?.text;
+    if (reply && typeof reply === "string" && reply.trim().length > 3) {
+      // Clean response
+      reply = reply.replace(/\[.*?\]/g, "").trim();
+      if (reply.length > 1900) reply = reply.slice(0, 1850) + "…";
+
+      // Add to history
+      history.push({ role: "assistant", content: reply });
+      return reply + "\n\n✨ Powered by BELAL-AI (Backup)";
     }
   } catch (e) {
-    console.log("[AI] Backup API failed:", e.message);
+    console.log("[AI] Blackbox failed:", e.message);
   }
 
-  // All failed
-  return `আরে আজ নেটওয়ার্কই খারাপ! 😔\n\nAPI-গুলো কাজ করছে না। একটু পরে আবার চেষ্টা করো প্লিজ। 🌸`;
+  // All APIs failed
+  return `আরে আজ নেটওয়ার্কই খারাপ! 😔\n\nদুইটা API-ই কাজ করছে না। একটু পরে আবার চেষ্টা করো প্লিজ। 🌸`;
 }
+
+// Auto cleanup old conversations every 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of conversations.entries()) {
+    // Remove conversations older than 30 minutes
+    const lastMessage = val[val.length - 1];
+    if (lastMessage && lastMessage.timestamp) {
+      if (now - lastMessage.timestamp > 30 * 60 * 1000) {
+        conversations.delete(key);
+      }
+    }
+  }
+}, 30 * 60 * 1000);
 
 module.exports = {
   config: {
     name: "ai",
-    version: "5.4.0",
+    version: "6.1.0",
     author: "Belal YT",
     cooldowns: 0,
     hasPermssion: 0,
     noPrefix: true,
-    description: "🤖 Smart AI — Fixed all bugs!",
-    category: "chat"
+    description: "🤖 Smart AI — 100% Free, No API Key, Multiple Fallback APIs",
+    category: "chat",
+    guide: {
+      en: "{pn} <question> - Ask AI anything\nExample: {pn} হ্যালো",
+      bn: "{pn} <প্রশ্ন> - AI কে যেকোনো কিছু জিজ্ঞেস করুন\nউদাহরণ: {pn} হ্যালো"
+    }
   },
 
+  // Main run function for command with prefix
   run: async function({ api, event, args }) {
     const q = args.join(" ").trim();
     if (!q) return api.sendMessage("🥰 কী বলতে চাও? আমি শুনছি...", event.threadID);
 
-    // FIX: Validate threadID before typing
-    const threadID = event.threadID ? String(event.threadID) : null;
+    // Validate threadID before using
+    const threadID = event.threadID ? String(event.threadID).trim() : null;
+    
+    // Show typing indicator with validated threadID
     safeTyping(api, threadID, true);
 
     try {
@@ -153,32 +182,40 @@ module.exports = {
       return api.sendMessage(reply, event.threadID);
     } catch (e) {
       safeTyping(api, threadID, false);
-      console.error("[AI] Error:", e);
+      console.error("[AI] run Error:", e);
       return api.sendMessage("❌ সমস্যা হয়েছে! আবার চেষ্টা করো।", event.threadID);
     }
   },
 
+  // handleEvent for noPrefix trigger words
   handleEvent: async function({ api, event }) {
-    // FIX: Validate event type and threadID
+    // Validate event object and threadID
     if (!event || !event.threadID) {
       console.log("[AI] Invalid event or missing threadID");
       return;
     }
 
+    // Only respond to message events
     if (event.type !== "message" && event.type !== "message_reply") return;
     
     const body = event.body?.toLowerCase() || "";
     if (!body) return;
 
+    // Trigger words for noPrefix mode
     const triggers = ["ai", "বট", "bot", "বেবি", "baby", "hey", "hello", "hi"];
     const isTrigger = triggers.some(t => body.startsWith(t));
+    
     if (!isTrigger) return;
 
+    // Extract question from trigger word
     const q = body.replace(/^(ai|বট|bot|বেবি|baby|hey|hello|hi)\s*/i, "").trim();
+    
     if (!q) return api.sendMessage("এই যে আমি আছি 🥰\n\nকী বলতে চাও?", event.threadID);
 
-    // FIX: Validate threadID
-    const threadID = String(event.threadID);
+    // Validate threadID
+    const threadID = event.threadID ? String(event.threadID).trim() : null;
+    
+    // Show typing indicator with validated threadID
     safeTyping(api, threadID, true);
 
     try {
@@ -192,4 +229,3 @@ module.exports = {
     }
   }
 };
-    
